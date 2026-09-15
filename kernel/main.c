@@ -1,6 +1,6 @@
 //SwordXOS kernel, i will add a kernel name in future updates cuz i like naming things :-)
 //quick thing, dont use default gcc, INSTEAD use the i686 gcc compiler.
-//version 002 added a working keyboard and SOME commands
+//version 003 added reboot, echo with arguments, and bug fixes
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -56,6 +56,11 @@ static inline uint8_t inb(uint16_t port) {
     uint8_t ret;
     __asm__ volatile ( "inb %1, %0" : "=a"(ret) : "Nd"(port) );
     return ret;
+}
+
+// Write a byte to an I/O port (needed for reboot)
+static inline void outb(uint16_t port, uint8_t val) {
+    __asm__ volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );
 }
 
 // Basic US Keyboard Scancode Set 1 lookup table
@@ -152,6 +157,12 @@ void terminal_writestring(const char* data)
     terminal_write(data, strlen(data));
 }
 
+// Reboot command implementation
+void reboot_system(void) {
+    terminal_writestring("Rebooting system...\n");
+    outb(0x64, 0xFE);
+}
+
 bool strcmp(const char* s1, const char* s2) {
     while (*s1 && (*s1 == *s2)) {
         s1++;
@@ -160,11 +171,21 @@ bool strcmp(const char* s1, const char* s2) {
     return *(const unsigned char*)s1 == *(const unsigned char*)s2;
 }
 
+// Helper function to check command prefixes for echo
+bool starts_with(const char* pre, const char* str) {
+    size_t i = 0;
+    while (pre[i] != '\0') {
+        if (str[i] != pre[i]) return false;
+        i++;
+    }
+    return true;
+}
+
 void launch_shell(void) {
     char input_buffer[256];
     size_t buf_index = 0;
 
-    terminal_writestring("swordxos> ");
+    terminal_writestring("shell$ ");
 
     while (true) {
         char c = keyboard_read_char();
@@ -176,20 +197,30 @@ void launch_shell(void) {
             if (buf_index > 0) {
                 if (strcmp(input_buffer, "help")) {
                     terminal_writestring("Available commands:\n");
-                    terminal_writestring("  help   - Show this help menu\n");
-                    terminal_writestring("  about  - Display OS info\n");
-                    terminal_writestring("  clear  - Clear the screen\n");
+                    terminal_writestring("  help         - I think its pretty clear what it does\n");
+                    terminal_writestring("  about        - Display OS info\n");
+                    terminal_writestring("  clear        - Clear the screen\n");
+                    terminal_writestring("  version      - Display OS version\n");
+                    terminal_writestring("  echo [text]  - Prints text on the terminal\n");
+                    terminal_writestring("  reboot       - Restart the computer\n");
                 } else if (strcmp(input_buffer, "about")) {
-                    terminal_writestring("SwordXOS, im too young to study C, why am i doing this: :|\n");
+                    terminal_writestring("SwordXOS, linux remade from scratch i need a better name\n");
                 } else if (strcmp(input_buffer, "clear")) {
                     terminal_initialize();
+                } else if (strcmp(input_buffer, "version")) {
+                    terminal_writestring("version 0.0.1 (003)\n");
+                } else if (starts_with("echo ", input_buffer)) {
+                    terminal_writestring(input_buffer + 5);
+                    terminal_writestring("\n");
+                } else if (strcmp(input_buffer, "reboot")) {
+                    reboot_system();
                 } else {
                     terminal_writestring("Unknown command. are you speaking arabic or something?.\n");
                 }
             }
 
             buf_index = 0;
-            terminal_writestring("swordxos> ");
+            terminal_writestring("shell$ ");
         } 
         else if (c == '\b') {
             if (buf_index > 0) {
@@ -209,7 +240,7 @@ void kernel_main(void)
 {
     terminal_initialize();
 
-    terminal_writestring("SwordXOS Booted!\n");
+    terminal_writestring("SwordXOS Booted with GRUB\n");
     
     launch_shell();
 }
