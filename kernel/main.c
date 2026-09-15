@@ -1,6 +1,6 @@
 //SwordXOS kernel, i will add a kernel name in future updates cuz i like naming things :-)
 //quick thing, dont use default gcc, INSTEAD use the i686 gcc compiler.
-//version 003 added reboot, echo with arguments, and bug fixes
+//version 003-1 cuz i forgot to fix a bug
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -58,7 +58,7 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
-// Write a byte to an I/O port (needed for reboot)
+// Write a byte to an I/O port
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );
 }
@@ -89,6 +89,16 @@ size_t terminal_column;
 uint8_t terminal_color;
 uint16_t* terminal_buffer = (uint16_t*)VGA_MEMORY;
 
+// Update the hardware cursor position on the screen
+void terminal_update_cursor(size_t x, size_t y) 
+{
+    uint16_t pos = y * VGA_WIDTH + x;
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t) (pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t) ((pos >> 8) & 0xFF));
+}
+
 void terminal_initialize(void) 
 {
     terminal_row = 0;
@@ -101,6 +111,7 @@ void terminal_initialize(void)
             terminal_buffer[index] = vga_entry(' ', terminal_color);
         }
     }
+    terminal_update_cursor(terminal_column, terminal_row);
 }
 
 void terminal_setcolor(uint8_t color) 
@@ -134,6 +145,7 @@ void terminal_putchar(char c)
         if (++terminal_row == VGA_HEIGHT) {
             terminal_scroll();
         }
+        terminal_update_cursor(terminal_column, terminal_row);
         return;
     }
 
@@ -144,6 +156,7 @@ void terminal_putchar(char c)
             terminal_scroll();
         }
     }
+    terminal_update_cursor(terminal_column, terminal_row);
 }
 
 void terminal_write(const char* data, size_t size) 
@@ -208,7 +221,7 @@ void launch_shell(void) {
                 } else if (strcmp(input_buffer, "clear")) {
                     terminal_initialize();
                 } else if (strcmp(input_buffer, "version")) {
-                    terminal_writestring("version 0.0.1 (003)\n");
+                    terminal_writestring("version 0.0.1 (004)\n");
                 } else if (starts_with("echo ", input_buffer)) {
                     terminal_writestring(input_buffer + 5);
                     terminal_writestring("\n");
@@ -227,6 +240,7 @@ void launch_shell(void) {
                 buf_index--;
                 terminal_column--;
                 terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
+                terminal_update_cursor(terminal_column, terminal_row);
             }
         } 
         else if (c != 0 && buf_index < sizeof(input_buffer) - 1) {
@@ -240,7 +254,7 @@ void kernel_main(void)
 {
     terminal_initialize();
 
-    terminal_writestring("SwordXOS Booted with GRUB\n");
+    terminal_writestring("SwordXOS Booted!\n");
     
     launch_shell();
 }
