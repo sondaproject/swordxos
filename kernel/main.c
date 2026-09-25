@@ -1,7 +1,6 @@
-//SwordXOS kernel, i will add a kernel name in future updates cuz i like naming things :-)
-//quick thing, dont use default gcc, INSTEAD use the i686 gcc compiler.
-//version 003-1 cuz i forgot to fix a bug
-
+// swordxos kenrnel version z1 (first ever GUI version).
+/*dev notes, i decided to put everything one file, it was mor helpful for me but it coulf be a pain for you to understand.
+thats why i decided to add tags to the kernel, it might help you.*/
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -10,251 +9,719 @@
 #error "You are not using a cross-compiler, you will most certainly run into trouble"
 #endif
 
-enum vga_color {
-    VGA_COLOR_BLACK = 0,
-    VGA_COLOR_BLUE = 1,
-    VGA_COLOR_GREEN = 2,
-    VGA_COLOR_CYAN = 3,
-    VGA_COLOR_RED = 4,
-    VGA_COLOR_MAGENTA = 5,
-    VGA_COLOR_BROWN = 6,
-    VGA_COLOR_LIGHT_GREY = 7,
-    VGA_COLOR_DARK_GREY = 8,
-    VGA_COLOR_LIGHT_BLUE = 9,
-    VGA_COLOR_LIGHT_GREEN = 10,
-    VGA_COLOR_LIGHT_CYAN = 11,
-    VGA_COLOR_LIGHT_RED = 12,
-    VGA_COLOR_LIGHT_MAGENTA = 13,
-    VGA_COLOR_LIGHT_BROWN = 14,
-    VGA_COLOR_WHITE = 15,
-};
+//multibot definition
+typedef struct multiboot_info {
+    uint32_t flags;
+    uint32_t mem_lower;
+    uint32_t mem_upper;
+    uint32_t boot_device;
+    uint32_t cmdline;
+    uint32_t mods_count;
+    uint32_t mods_addr;
+    uint32_t syms[4];
+    uint32_t mmap_length;
+    uint32_t mmap_addr;
+    uint32_t drives_length;
+    uint32_t drives_addr;
+    uint32_t config_table;
+    uint32_t boot_loader_name;
+    uint32_t apm_table;
+    uint32_t vbe_control_info;
+    uint32_t vbe_mode_info;
+    uint16_t vbe_mode;
+    uint16_t vbe_interface_seg;
+    uint16_t vbe_interface_off;
+    uint16_t vbe_interface_len;
+    
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t  framebuffer_bpp;
+    uint8_t  framebuffer_type;
+    uint8_t  color_info[6];
+} __attribute__((packed)) multiboot_info_t;
 
-static inline uint8_t vga_entry_color(enum vga_color fg, enum vga_color bg) 
-{
-    return fg | bg << 4;
-}
+//frambuffer
+static uint32_t* framebuffer = NULL;
+static uint32_t screen_width = 0;
+static uint32_t screen_height = 0;
+static uint32_t screen_pitch = 0;
 
-static inline uint16_t vga_entry(unsigned char uc, uint8_t color) 
-{
-    return (uint16_t) uc | (uint16_t) color << 8;
-}
+//color palette 
+#define color_desktop_bg 0x001b4d3e
+#define color_taskbar    0x002d3748
+#define color_button     0x003182ce
+#define color_menu_bg    0x001a202c
+#define color_window_hdr 0x002b6cb0
+#define color_close_btn  0x00e53e3e
+#define color_white      0x00ffffff
+#define color_black      0x00000000
+#define color_green      0x0000ff00
+#define color_dark_gray  0x004a5568
 
-size_t strlen(const char* str) 
-{
-    size_t len = 0;
-    while (str[len])
-        len++;
-    return len;
-}
-
-#define VGA_WIDTH   80
-#define VGA_HEIGHT  25
-#define VGA_MEMORY  0xB8000 
-
-// Read a byte from an I/O port
+//i/o port
 static inline uint8_t inb(uint16_t port) {
     uint8_t ret;
-    __asm__ volatile ( "inb %1, %0" : "=a"(ret) : "Nd"(port) );
+    __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
 }
 
-// Write a byte to an I/O port
 static inline void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ( "outb %0, %1" : : "a"(val), "Nd"(port) );
+    __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
-// Basic US Keyboard Scancode Set 1 lookup table
-const char scancode_ascii[128] = {
-    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
-    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
-    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
-    0, '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
-    '*', 0, ' '
+static inline void io_wait(void) {
+    outb(0x80, 0x00);
+}
+
+//8x16 font
+static const uint8_t font_8x16[128][16] = {
+    [' '] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['!'] = {0x00,0x00,0x18,0x3c,0x3c,0x3c,0x18,0x18,0x18,0x00,0x18,0x18,0x00,0x00,0x00,0x00},
+    ['"'] = {0x00,0x00,0x66,0x66,0x66,0x24,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['#'] = {0x00,0x00,0x6c,0x6c,0xfe,0x6c,0x6c,0xfe,0x6c,0x6c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['$'] = {0x18,0x18,0x7c,0xc6,0xc0,0x78,0x0c,0xc6,0x7c,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['%'] = {0x00,0x00,0x00,0xc6,0xcc,0x18,0x30,0x66,0xc6,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['&'] = {0x00,0x00,0x38,0x6c,0x38,0x76,0xdc,0xcc,0x76,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['\'']= {0x00,0x00,0x30,0x30,0x60,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['('] = {0x00,0x00,0x0c,0x18,0x30,0x30,0x30,0x30,0x18,0x0c,0x00,0x00,0x00,0x00,0x00,0x00},
+    [')'] = {0x00,0x00,0x30,0x18,0x0c,0x0c,0x0c,0x0c,0x18,0x30,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['*'] = {0x00,0x00,0x00,0x66,0x3c,0xff,0x3c,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['+'] = {0x00,0x00,0x00,0x18,0x18,0x7e,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    [','] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00},
+    ['-'] = {0x00,0x00,0x00,0x00,0x00,0xfe,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['.'] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['/'] = {0x00,0x00,0x02,0x06,0x0c,0x18,0x30,0x60,0xc0,0x80,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['0'] = {0x00,0x00,0x3c,0x66,0x6e,0x76,0x66,0x66,0x66,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['1'] = {0x00,0x00,0x18,0x38,0x18,0x18,0x18,0x18,0x18,0x18,0x7e,0x00,0x00,0x00,0x00,0x00},
+    ['2'] = {0x00,0x00,0x3c,0x66,0x06,0x0c,0x18,0x30,0x60,0x66,0x7e,0x00,0x00,0x00,0x00,0x00},
+    ['3'] = {0x00,0x00,0x3c,0x66,0x06,0x1c,0x06,0x06,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['4'] = {0x00,0x00,0x0e,0x1e,0x36,0x66,0x66,0x7f,0x06,0x06,0x0f,0x00,0x00,0x00,0x00,0x00},
+    ['5'] = {0x00,0x00,0x7e,0x60,0x60,0x7c,0x06,0x06,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['6'] = {0x00,0x00,0x1c,0x30,0x60,0x7c,0x66,0x66,0x66,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['7'] = {0x00,0x00,0x7e,0x66,0x06,0x0c,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['8'] = {0x00,0x00,0x3c,0x66,0x66,0x3c,0x66,0x66,0x66,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['9'] = {0x00,0x00,0x3c,0x66,0x66,0x66,0x3e,0x06,0x0c,0x18,0x38,0x00,0x00,0x00,0x00,0x00},
+    [':'] = {0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00},
+    [';'] = {0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x18,0x18,0x30,0x00,0x00,0x00,0x00,0x00},
+    ['<'] = {0x00,0x00,0x06,0x0c,0x18,0x30,0x18,0x0c,0x06,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['='] = {0x00,0x00,0x00,0x00,0x7e,0x00,0x00,0x7e,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['>'] = {0x00,0x00,0x60,0x30,0x18,0x0c,0x18,0x30,0x60,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['?'] = {0x00,0x00,0x3c,0x66,0x06,0x0c,0x18,0x18,0x00,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['@'] = {0x00,0x00,0x3e,0x63,0x7b,0x7b,0x7b,0x03,0x1e,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['A'] = {0x00,0x00,0x18,0x3c,0x66,0x66,0x7e,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00},
+    ['B'] = {0x00,0x00,0x7c,0x66,0x66,0x7c,0x66,0x66,0x66,0x66,0x7c,0x00,0x00,0x00,0x00,0x00},
+    ['C'] = {0x00,0x00,0x3c,0x66,0x60,0x60,0x60,0x60,0x60,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['D'] = {0x00,0x00,0x78,0x6c,0x66,0x66,0x66,0x66,0x66,0x6c,0x78,0x00,0x00,0x00,0x00,0x00},
+    ['E'] = {0x00,0x00,0x7e,0x60,0x60,0x7c,0x60,0x60,0x60,0x60,0x7e,0x00,0x00,0x00,0x00,0x00},
+    ['F'] = {0x00,0x00,0x7e,0x60,0x60,0x7c,0x60,0x60,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00},
+    ['G'] = {0x00,0x00,0x3c,0x66,0x60,0x60,0x6e,0x66,0x66,0x66,0x3e,0x00,0x00,0x00,0x00,0x00},
+    ['H'] = {0x00,0x00,0x66,0x66,0x66,0x7e,0x66,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00},
+    ['I'] = {0x00,0x00,0x3c,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['J'] = {0x00,0x00,0x1e,0x0c,0x0c,0x0c,0x0c,0x0c,0x6c,0x6c,0x38,0x00,0x00,0x00,0x00,0x00},
+    ['K'] = {0x00,0x00,0x66,0x6c,0x78,0x70,0x78,0x6c,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00},
+    ['L'] = {0x00,0x00,0x60,0x60,0x60,0x60,0x60,0x60,0x60,0x60,0x7e,0x00,0x00,0x00,0x00,0x00},
+    ['M'] = {0x00,0x00,0x63,0x77,0x7f,0x6b,0x63,0x63,0x63,0x63,0x63,0x00,0x00,0x00,0x00,0x00},
+    ['N'] = {0x00,0x00,0x66,0x76,0x7e,0x7e,0x6e,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00},
+    ['O'] = {0x00,0x00,0x3c,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['P'] = {0x00,0x00,0x7c,0x66,0x66,0x7c,0x60,0x60,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00},
+    ['Q'] = {0x00,0x00,0x3c,0x66,0x66,0x66,0x66,0x66,0x66,0x3c,0x0e,0x06,0x00,0x00,0x00,0x00},
+    ['R'] = {0x00,0x00,0x7c,0x66,0x66,0x7c,0x6c,0x66,0x66,0x66,0x63,0x00,0x00,0x00,0x00,0x00},
+    ['S'] = {0x00,0x00,0x3c,0x66,0x60,0x3c,0x06,0x06,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['T'] = {0x00,0x00,0x7e,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['U'] = {0x00,0x00,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['V'] = {0x00,0x00,0x66,0x66,0x66,0x66,0x66,0x66,0x3c,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['W'] = {0x00,0x00,0x63,0x63,0x63,0x63,0x6b,0x7f,0x77,0x63,0x63,0x00,0x00,0x00,0x00,0x00},
+    ['X'] = {0x00,0x00,0x66,0x66,0x3c,0x18,0x18,0x3c,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00},
+    ['Y'] = {0x00,0x00,0x66,0x66,0x66,0x3c,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['Z'] = {0x00,0x00,0x7e,0x06,0x0c,0x18,0x30,0x60,0x60,0x66,0x7e,0x00,0x00,0x00,0x00,0x00},
+    ['['] = {0x00,0x00,0x1e,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x1e,0x00,0x00,0x00,0x00,0x00},
+    ['\\']= {0x00,0x00,0x80,0x60,0x30,0x18,0x0c,0x06,0x03,0x01,0x00,0x00,0x00,0x00,0x00,0x00},
+    [']'] = {0x00,0x00,0x78,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x78,0x00,0x00,0x00,0x00,0x00},
+    ['^'] = {0x00,0x00,0x18,0x3c,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['_'] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00},
+    ['`'] = {0x00,0x00,0x30,0x18,0x0c,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['a'] = {0x00,0x00,0x00,0x00,0x3c,0x06,0x3e,0x66,0x66,0x3e,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['b'] = {0x00,0x00,0x60,0x60,0x7c,0x66,0x66,0x66,0x66,0x7c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['c'] = {0x00,0x00,0x00,0x00,0x3c,0x66,0x60,0x60,0x66,0x3c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['d'] = {0x00,0x00,0x06,0x06,0x3e,0x66,0x66,0x66,0x66,0x3e,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['e'] = {0x00,0x00,0x00,0x00,0x3c,0x66,0x7e,0x60,0x60,0x3c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['f'] = {0x00,0x00,0x1c,0x30,0x7c,0x30,0x30,0x30,0x30,0x78,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['g'] = {0x00,0x00,0x00,0x00,0x3e,0x66,0x66,0x3e,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['h'] = {0x00,0x00,0x60,0x60,0x7c,0x66,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['i'] = {0x00,0x00,0x18,0x00,0x18,0x18,0x18,0x18,0x18,0x18,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['j'] = {0x00,0x00,0x06,0x00,0x06,0x06,0x06,0x06,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['k'] = {0x00,0x00,0x60,0x60,0x66,0x6c,0x78,0x6c,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['l'] = {0x00,0x00,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    ['m'] = {0x00,0x00,0x00,0x00,0x66,0x7f,0x6b,0x6b,0x6b,0x63,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['n'] = {0x00,0x00,0x00,0x00,0x7c,0x66,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['o'] = {0x00,0x00,0x00,0x00,0x3c,0x66,0x66,0x66,0x66,0x3c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['p'] = {0x00,0x00,0x00,0x00,0x7c,0x66,0x66,0x7c,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00},
+    ['q'] = {0x00,0x00,0x00,0x00,0x3e,0x66,0x66,0x3e,0x06,0x06,0x0f,0x00,0x00,0x00,0x00,0x00},
+    ['r'] = {0x00,0x00,0x00,0x00,0x3b,0x6e,0x68,0x60,0x60,0x60,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['s'] = {0x00,0x00,0x00,0x00,0x3e,0x60,0x3c,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['t'] = {0x00,0x00,0x10,0x10,0x7c,0x10,0x10,0x10,0x10,0x0c,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['u'] = {0x00,0x00,0x00,0x00,0x66,0x66,0x66,0x66,0x66,0x3e,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['v'] = {0x00,0x00,0x00,0x00,0x66,0x66,0x66,0x3c,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['w'] = {0x00,0x00,0x00,0x00,0x63,0x63,0x6b,0x6b,0x7f,0x36,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['x'] = {0x00,0x00,0x00,0x00,0x66,0x3c,0x18,0x3c,0x66,0x66,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['y'] = {0x00,0x00,0x00,0x00,0x66,0x66,0x66,0x3e,0x06,0x66,0x3c,0x00,0x00,0x00,0x00,0x00},
+    ['z'] = {0x00,0x00,0x00,0x00,0x7e,0x0c,0x18,0x30,0x60,0x7e,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['{'] = {0x00,0x00,0x0e,0x18,0x18,0x30,0x18,0x18,0x0e,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['|'] = {0x00,0x00,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['}'] = {0x00,0x00,0x70,0x18,0x18,0x0c,0x18,0x18,0x70,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    ['~'] = {0x00,0x00,0x76,0xdc,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
 };
 
-// Poll the PS/2 keyboard for a character
-char keyboard_read_char(void) {
-    while (1) {
-        if (inb(0x64) & 1) {
-            uint8_t scancode = inb(0x60);
-            if (!(scancode & 0x80)) {
-                return scancode_ascii[scancode];
+static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
+    if (x >= screen_width || y >= screen_height) return;
+    framebuffer[(y * (screen_pitch / 4)) + x] = color;
+}
+
+static inline uint32_t get_pixel(uint32_t x, uint32_t y) {
+    if (x >= screen_width || y >= screen_height) return 0;
+    return framebuffer[(y * (screen_pitch / 4)) + x];
+}
+
+void draw_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
+    for (uint32_t i = 0; i < height; i++) {
+        for (uint32_t j = 0; j < width; j++) {
+            put_pixel(x + j, y + i, color);
+        }
+    }
+}
+
+void draw_char(char c, uint32_t x, uint32_t y, uint32_t fg_color) {
+    uint8_t index = (uint8_t)c;
+    if (index >= 128) return;
+    for (int row = 0; row < 16; row++) {
+        uint8_t line = font_8x16[index][row];
+        for (int col = 0; col < 8; col++) {
+            if (line & (1 << (7 - col))) put_pixel(x + col, y + row, fg_color);
+        }
+    }
+}
+
+void draw_string(const char* str, uint32_t x, uint32_t y, uint32_t fg_color) {
+    uint32_t cur_x = x;
+    while (*str) {
+        if (*str == '\n') { cur_x = x; y += 16; } 
+        else { draw_char(*str, cur_x, y, fg_color); cur_x += 8; }
+        str++;
+    }
+}
+
+//ui engine state flags
+static bool start_menu_open = false;
+static bool window_open = true;
+
+static int win_x = 120;
+static int win_y = 80;
+static int win_w = 540;
+static int win_h = 360;
+
+static bool is_dragging = false;
+static int drag_offset_x = 0;
+static int drag_offset_y = 0;
+static bool prev_left_click = false;
+
+//terminal histry
+#define TERM_MAX_LINES 12
+#define TERM_LINE_LEN 60
+static char term_lines[TERM_MAX_LINES][TERM_LINE_LEN];
+static uint32_t term_line_count = 0;
+
+#define kb_buf_max 32
+static char term_input[kb_buf_max] = {0};
+static uint32_t term_input_len = 0;
+
+//ps/2 keyboard driver
+static const char scancode_ascii[128] = {
+    0, 27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+    '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,
+    '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0, '*', 0, ' '
+};
+
+/* Terminal Output Buffer Handler */
+void term_print(const char* msg) {
+    if (term_line_count >= TERM_MAX_LINES) {
+        for (uint32_t i = 1; i < TERM_MAX_LINES; i++) {
+            for (uint32_t j = 0; j < TERM_LINE_LEN; j++) {
+                term_lines[i - 1][j] = term_lines[i][j];
+            }
+        }
+        term_line_count = TERM_MAX_LINES - 1;
+    }
+
+    uint32_t idx = 0;
+    while (msg[idx] != '\0' && idx < TERM_LINE_LEN - 1) {
+        term_lines[term_line_count][idx] = msg[idx];
+        idx++;
+    }
+    term_lines[term_line_count][idx] = '\0';
+    term_line_count++;
+}
+
+void term_clear(void) {
+    term_line_count = 0;
+    for (uint32_t i = 0; i < TERM_MAX_LINES; i++) {
+        term_lines[i][0] = '\0';
+    }
+}
+
+static bool strcmp_exact(const char* a, const char* b) {
+    while (*a && *b) {
+        if (*a != *b) return false;
+        a++;
+        b++;
+    }
+    return (*a == *b);
+}
+
+//terminal commands
+void execute_command(const char* cmd) {
+    char echo_buf[68] = "swordxos@kernel:~$ ";
+    uint32_t idx = 19;
+    uint32_t c_idx = 0;
+    while (cmd[c_idx] != '\0' && idx < 67) {
+        echo_buf[idx++] = cmd[c_idx++];
+    }
+    echo_buf[idx] = '\0';
+    term_print(echo_buf);
+
+    if (strcmp_exact(cmd, "help")) {
+        term_print("Available Commands:");
+        term_print("  help    - Show this manual");
+        term_print("  clear   - Clear terminal output");
+        term_print("  about   - SwordXOS kernel details");
+        term_print("  fetch   - Display system info");
+        term_print("  reboot  - Restart the computer");
+    } else if (strcmp_exact(cmd, "clear")) {
+        term_clear();
+    } else if (strcmp_exact(cmd, "about")) {
+        term_print("SwordXOS Bare-metal Kernel v1.0.4");
+        term_print("32-bit Protected Mode, Custom VBE Engine");
+    } else if (strcmp_exact(cmd, "fetch")) {
+        term_print("OS: SwordXOS x86_32");
+        term_print("Display: VBE Framebuffer Pixel Engine");
+        term_print("Input: PS/2 Dual Mouse/Keyboard Driver");
+    } else if (strcmp_exact(cmd, "reboot")) {
+        outb(0x64, 0xfe);
+    } else if (cmd[0] != '\0') {
+        term_print("Unknown command. Type 'help'.");
+    }
+}
+
+void draw_desktop_icons(void) {
+    uint32_t icon_x = 30;
+    uint32_t icon_y = 40;
+
+    draw_rect(icon_x, icon_y, 48, 40, color_black);
+    draw_rect(icon_x + 2, icon_y + 2, 44, 36, color_dark_gray);
+    draw_string(">", icon_x + 8, icon_y + 12, color_green);
+    draw_string("_", icon_x + 20, icon_y + 12, color_white);
+
+    draw_string("Terminal", icon_x - 8, icon_y + 48, color_white);
+}
+
+void draw_terminal_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    if (!window_open) return;
+
+    // shell and background
+    draw_rect(x, y, w, h, color_black);               
+    draw_rect(x, y, w, 24, color_window_hdr);        
+
+    // close button
+    draw_rect(x + w - 24, y + 2, 20, 20, color_close_btn);
+    draw_string("X", x + w - 18, y + 4, color_white);
+
+    // window border
+    for (uint32_t i = 0; i < w; i++) {
+        put_pixel(x + i, y, color_dark_gray);
+        put_pixel(x + i, y + h - 1, color_dark_gray);
+    }
+    for (uint32_t j = 0; j < h; j++) {
+        put_pixel(x, y + j, color_dark_gray);
+        put_pixel(x + w - 1, y + j, color_dark_gray);
+    }
+
+    draw_string("terminal", x + 8, y + 4, color_white);
+
+    uint32_t start_y = y + 32;
+    for (uint32_t i = 0; i < term_line_count; i++) {
+        draw_string(term_lines[i], x + 12, start_y + (i * 20), color_white);
+    }
+
+    // shell line before input
+    uint32_t prompt_y = start_y + (term_line_count * 20);
+    if (prompt_y <= y + h - 28) {
+        draw_string("shell> ", x + 6, prompt_y, color_white);
+        draw_string(term_input, x + 164, prompt_y, color_green);
+        draw_rect(x + 164 + (term_input_len * 8), prompt_y, 8, 16, color_green);
+    }
+}
+
+//start menu button and start menu
+void draw_start_menu(void) {
+    if (!start_menu_open) return;
+    
+    uint32_t menu_x = 10;
+    uint32_t menu_y = screen_height - 200;
+    uint32_t menu_w = 160;
+    uint32_t menu_h = 158;
+
+    draw_rect(menu_x, menu_y, menu_w, menu_h, color_menu_bg);
+    
+    for (uint32_t i = 0; i < menu_w; i++) {
+        put_pixel(menu_x + i, menu_y, color_button);
+        put_pixel(menu_x + i, menu_y + menu_h - 1, color_button);
+    }
+    for (uint32_t j = 0; j < menu_h; j++) {
+        put_pixel(menu_x, menu_y + j, color_button);
+        put_pixel(menu_x + menu_w - 1, menu_y + j, color_button);
+    }
+
+    draw_string("> Terminal", menu_x + 12, menu_y + 12, color_white);
+    draw_string("> Clear Screen", menu_x + 12, menu_y + 48, color_white);
+    draw_string("> About OS", menu_x + 12, menu_y + 84, color_white);
+    draw_string("> Reboot System", menu_x + 12, menu_y + 120, color_white);
+}
+//desktop
+void ui_render_desktop(void) {
+    draw_rect(0, 0, screen_width, screen_height, color_desktop_bg);
+    draw_desktop_icons();
+    draw_terminal_window(win_x, win_y, win_w, win_h);
+
+    // "taskbar"
+    draw_rect(0, screen_height - 40, screen_width, 40, color_taskbar);
+
+    // start button
+    draw_rect(10, screen_height - 32, 80, 24, color_button);
+    draw_string("Start", 28, screen_height - 28, color_white);
+
+    draw_start_menu();
+}
+
+//mouse pointer
+#define cursor_w 12
+#define cursor_h 19
+static const char* cursor_sprite[cursor_h] = {
+    "XX           ",
+    "X.X          ",
+    "X...X         ",
+    "X....X        ",
+    "X.....X       ",
+    "X......X      ",
+    "X.......X     ",
+    "X........X    ",
+    "X.........X   ",
+    "X..........X  ",
+    "X.......XXXXX ",
+    "X..X..Xx     ",
+    "X.X X...X    ",
+    "XX   X...X   ",
+    "X     X...X  ",
+    "       X...X ",
+    "         XX ",
+    "            ",
+    "            "
+};
+
+static int mouse_x = 400;
+static int mouse_y = 300;
+static uint32_t mouse_backbuffer[cursor_w * cursor_h];
+
+void mouse_save_backbuffer(int x, int y) {
+    for (int cy = 0; cy < cursor_h; cy++) {
+        for (int cx = 0; cx < cursor_w; cx++) {
+            mouse_backbuffer[cy * cursor_w + cx] = get_pixel(x + cx, y + cy);
+        }
+    }
+}
+
+void mouse_restore_backbuffer(int x, int y) {
+    for (int cy = 0; cy < cursor_h; cy++) {
+        for (int cx = 0; cx < cursor_w; cx++) {
+            put_pixel(x + cx, y + cy, mouse_backbuffer[cy * cursor_w + cx]);
+        }
+    }
+}
+
+void mouse_draw_sprite(int x, int y) {
+    for (int cy = 0; cy < cursor_h; cy++) {
+        for (int cx = 0; cx < cursor_w; cx++) {
+            char pixel = cursor_sprite[cy][cx];
+            if (pixel == 'X') {
+                put_pixel(x + cx, y + cy, color_black);
+            } else if (pixel == '.') {
+                put_pixel(x + cx, y + cy, color_white);
             }
         }
     }
 }
 
-size_t terminal_row;
-size_t terminal_column;
-uint8_t terminal_color;
-uint16_t* terminal_buffer = (uint16_t*)VGA_MEMORY;
-
-// Update the hardware cursor position on the screen
-void terminal_update_cursor(size_t x, size_t y) 
-{
-    uint16_t pos = y * VGA_WIDTH + x;
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t) (pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t) ((pos >> 8) & 0xFF));
+static void mouse_wait(uint8_t type) {
+    uint32_t timeout = 10000;
+    if (type == 0) {
+        while (timeout--) {
+            io_wait();
+            if (inb(0x64) & 1) return;
+        }
+    } else {
+        while (timeout--) {
+            io_wait();
+            if (!(inb(0x64) & 2)) return;
+        }
+    }
+}
+//mouse input
+static void mouse_write(uint8_t val) {
+    mouse_wait(1);
+    outb(0x64, 0xd4);
+    mouse_wait(1);
+    outb(0x60, val);
 }
 
-void terminal_initialize(void) 
-{
-    terminal_row = 0;
-    terminal_column = 0;
-    terminal_color = vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+//mouse read (input to output)
+static uint8_t mouse_read(void) {
+    mouse_wait(0);
+    return inb(0x60);
+}
+
+//mouse init
+void ps2_mouse_init(void) {
+    uint8_t status;
+
+    mouse_wait(1);
+    outb(0x64, 0xa8); 
+
+    mouse_wait(1);
+    outb(0x64, 0x20);
+    status = mouse_read();
+
+    status |= 0x02;   
+    status &= ~0x20;  
+
+    mouse_wait(1);
+    outb(0x64, 0x60);
+    mouse_wait(1);
+    outb(0x60, status);
+
+    mouse_write(0xf6); 
+    mouse_read();
+
+    mouse_write(0xf4); 
+    mouse_read();
+
+    while (inb(0x64) & 1) { inb(0x60); io_wait(); } 
+
+    mouse_save_backbuffer(mouse_x, mouse_y);
+    mouse_draw_sprite(mouse_x, mouse_y);
+}
+
+static bool mouse_read_byte(uint8_t* out_byte) {
+    uint8_t status = inb(0x64);
+    if ((status & 0x01) && (status & 0x20)) {
+        *out_byte = inb(0x60);
+        return true;
+    }
+    return false;
+}
+
+//mouse events, for example, when you click an icon on the desktop
+void handle_mouse_events(int x, int y, bool left_down) {
+    bool click_event = left_down && !prev_left_click;
+    bool needs_redraw = false;
+
+    // terminal icon at desktop
+    if (click_event && x >= 20 && x <= 80 && y >= 30 && y <= 100) {
+        window_open = true;
+        needs_redraw = true;
+    }
+
+    // toggle start menu
+    else if (click_event && x >= 10 && x <= 90 && y >= (int)screen_height - 32 && y <= (int)screen_height - 8) {
+        start_menu_open = !start_menu_open;
+        needs_redraw = true;
+    }
+
+    //start menu
+    else if (start_menu_open && click_event) {
+        uint32_t menu_x = 10;
+        uint32_t menu_y = screen_height - 200;
+        
+        if (x >= (int)menu_x && x <= (int)(menu_x + 160)) {
+            if (y >= (int)(menu_y + 10) && y <= (int)(menu_y + 40)) {
+                window_open = true;
+                start_menu_open = false;
+                needs_redraw = true;
+            } else if (y >= (int)(menu_y + 40) && y <= (int)(menu_y + 70)) {
+                term_clear();
+                start_menu_open = false;
+                needs_redraw = true;
+            } else if (y >= (int)(menu_y + 70) && y <= (int)(menu_y + 110)) {
+                execute_command("about");
+                window_open = true;
+                start_menu_open = false;
+                needs_redraw = true;
+            } else if (y >= (int)(menu_y + 110) && y <= (int)(menu_y + 150)) {
+                outb(0x64, 0xfe); 
+            } else {
+                start_menu_open = false;
+                needs_redraw = true;
+            }
+        } else {
+            start_menu_open = false;
+            needs_redraw = true;
+        }
+    }
+
+    // close window button
+    else if (window_open && click_event) {
+        if (x >= win_x + win_w - 24 && x <= win_x + win_w - 4 && y >= win_y + 2 && y <= win_y + 22) {
+            window_open = false;
+            needs_redraw = true;
+        }
+    }
+
+    if (window_open && click_event && !is_dragging) {
+        if (x >= win_x && x <= win_x + win_w - 24 && y >= win_y && y <= win_y + 24) {
+            is_dragging = true;
+            drag_offset_x = x - win_x;
+            drag_offset_y = y - win_y;
+        }
+    }
+
+    // window drag
+    if (left_down && is_dragging) {
+        int new_win_x = x - drag_offset_x;
+        int new_win_y = y - drag_offset_y;
+        
+        if (new_win_x != win_x || new_win_y != win_y) {
+            win_x = new_win_x;
+            win_y = new_win_y;
+            needs_redraw = true;
+        }
+    }
+
+    if (!left_down) {
+        is_dragging = false;
+    }
+
+    if (needs_redraw) {
+        ui_render_desktop();
+    }
+
+    prev_left_click = left_down;
+}
+
+static uint8_t mouse_cycle = 0;
+static uint8_t mouse_packet[3];
+
+void mouse_poll_update(void) {
+    uint8_t b;
+
+    while (mouse_read_byte(&b)) {
+        if (mouse_cycle == 0) {
+            if (b & 0x08) {
+                mouse_packet[0] = b;
+                mouse_cycle = 1;
+            }
+        } else if (mouse_cycle == 1) {
+            mouse_packet[1] = b;
+            mouse_cycle = 2;
+        } else if (mouse_cycle == 2) {
+            mouse_packet[2] = b;
+            mouse_cycle = 0;
+
+            uint8_t b1 = mouse_packet[0];
+            uint8_t b2 = mouse_packet[1];
+            uint8_t b3 = mouse_packet[2];
+
+            int rel_x = (int8_t)b2;
+            int rel_y = (int8_t)b3;
+            bool left_click = (b1 & 0x01);
+
+            mouse_restore_backbuffer(mouse_x, mouse_y);
+
+            mouse_x += rel_x;
+            mouse_y -= rel_y; 
+
+            if (mouse_x < 0) mouse_x = 0;
+            if (mouse_y < 0) mouse_y = 0;
+            if (mouse_x >= (int)screen_width - cursor_w)  mouse_x = screen_width - cursor_w;
+            if (mouse_y >= (int)screen_height - cursor_h) mouse_y = screen_height - cursor_h;
+
+            handle_mouse_events(mouse_x, mouse_y, left_click);
+
+            mouse_save_backbuffer(mouse_x, mouse_y);
+            mouse_draw_sprite(mouse_x, mouse_y);
+        }
+    }
+}
+
+void keyboard_poll_update(void) {
+    uint8_t status = inb(0x64);
     
-    for (size_t y = 0; y < VGA_HEIGHT; y++) {
-        for (size_t x = 0; x < VGA_WIDTH; x++) {
-            const size_t index = y * VGA_WIDTH + x;
-            terminal_buffer[index] = vga_entry(' ', terminal_color);
-        }
-    }
-    terminal_update_cursor(terminal_column, terminal_row);
-}
+    if ((status & 0x01) && !(status & 0x20)) {
+        uint8_t scancode = inb(0x60);
 
-void terminal_setcolor(uint8_t color) 
-{
-    terminal_color = color;
-}
+        if (!(scancode & 0x80)) {
+            char key = scancode_ascii[scancode];
+            bool char_added = false;
 
-void terminal_putentryat(char c, uint8_t color, size_t x, size_t y) 
-{
-    const size_t index = y * VGA_WIDTH + x;
-    terminal_buffer[index] = vga_entry(c, color);
-}
-
-void terminal_scroll(void) 
-{
-    for (size_t y = 1; y < VGA_HEIGHT; y++) {
-        for (size_t x = 0; x < VGA_WIDTH; x++) {
-            terminal_buffer[(y - 1) * VGA_WIDTH + x] = terminal_buffer[y * VGA_WIDTH + x];
-        }
-    }
-    for (size_t x = 0; x < VGA_WIDTH; x++) {
-        terminal_buffer[(VGA_HEIGHT - 1) * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
-    }
-    terminal_row = VGA_HEIGHT - 1;
-}
-
-void terminal_putchar(char c) 
-{
-    if (c == '\n') {
-        terminal_column = 0;
-        if (++terminal_row == VGA_HEIGHT) {
-            terminal_scroll();
-        }
-        terminal_update_cursor(terminal_column, terminal_row);
-        return;
-    }
-
-    terminal_putentryat(c, terminal_color, terminal_column, terminal_row);
-    if (++terminal_column == VGA_WIDTH) {
-        terminal_column = 0;
-        if (++terminal_row == VGA_HEIGHT) {
-            terminal_scroll();
-        }
-    }
-    terminal_update_cursor(terminal_column, terminal_row);
-}
-
-void terminal_write(const char* data, size_t size) 
-{
-    for (size_t i = 0; i < size; i++)
-        terminal_putchar(data[i]);
-}
-
-void terminal_writestring(const char* data) 
-{
-    terminal_write(data, strlen(data));
-}
-
-// Reboot command implementation
-void reboot_system(void) {
-    terminal_writestring("Rebooting system...\n");
-    outb(0x64, 0xFE);
-}
-
-bool strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
-    return *(const unsigned char*)s1 == *(const unsigned char*)s2;
-}
-
-// Helper function to check command prefixes for echo
-bool starts_with(const char* pre, const char* str) {
-    size_t i = 0;
-    while (pre[i] != '\0') {
-        if (str[i] != pre[i]) return false;
-        i++;
-    }
-    return true;
-}
-
-void launch_shell(void) {
-    char input_buffer[256];
-    size_t buf_index = 0;
-
-    terminal_writestring("shell$ ");
-
-    while (true) {
-        char c = keyboard_read_char();
-
-        if (c == '\n') {
-            terminal_putchar('\n');
-            input_buffer[buf_index] = '\0';
-
-            if (buf_index > 0) {
-                if (strcmp(input_buffer, "help")) {
-                    terminal_writestring("Available commands:\n");
-                    terminal_writestring("  help         - I think its pretty clear what it does\n");
-                    terminal_writestring("  about        - Display OS info\n");
-                    terminal_writestring("  clear        - Clear the screen\n");
-                    terminal_writestring("  version      - Display OS version\n");
-                    terminal_writestring("  echo [text]  - Prints text on the terminal\n");
-                    terminal_writestring("  reboot       - Restart the computer\n");
-                } else if (strcmp(input_buffer, "about")) {
-                    terminal_writestring("SwordXOS, linux remade from scratch i need a better name\n");
-                } else if (strcmp(input_buffer, "clear")) {
-                    terminal_initialize();
-                } else if (strcmp(input_buffer, "version")) {
-                    terminal_writestring("version 0.0.1 (004)\n");
-                } else if (starts_with("echo ", input_buffer)) {
-                    terminal_writestring(input_buffer + 5);
-                    terminal_writestring("\n");
-                } else if (strcmp(input_buffer, "reboot")) {
-                    reboot_system();
-                } else {
-                    terminal_writestring("Unknown command. are you speaking arabic or something?.\n");
+            if (key == '\b') {
+                if (term_input_len > 0) {
+                    term_input_len--;
+                    term_input[term_input_len] = '\0';
+                    char_added = true;
+                }
+            } else if (key == '\n') {
+                execute_command(term_input);
+                term_input_len = 0;
+                term_input[0] = '\0';
+                char_added = true;
+            } else if (key >= ' ' && key <= '~') {
+                if (term_input_len < kb_buf_max - 1) {
+                    term_input[term_input_len] = key;
+                    term_input_len++;
+                    term_input[term_input_len] = '\0';
+                    char_added = true;
                 }
             }
 
-            buf_index = 0;
-            terminal_writestring("shell$ ");
-        } 
-        else if (c == '\b') {
-            if (buf_index > 0) {
-                buf_index--;
-                terminal_column--;
-                terminal_putentryat(' ', terminal_color, terminal_column, terminal_row);
-                terminal_update_cursor(terminal_column, terminal_row);
+            if (window_open && char_added) {
+                mouse_restore_backbuffer(mouse_x, mouse_y);
+                ui_render_desktop();
+                mouse_save_backbuffer(mouse_x, mouse_y);
+                mouse_draw_sprite(mouse_x, mouse_y);
             }
-        } 
-        else if (c != 0 && buf_index < sizeof(input_buffer) - 1) {
-            input_buffer[buf_index++] = c;
-            terminal_putchar(c);
         }
     }
 }
 
-void kernel_main(void) 
-{
-    terminal_initialize();
+void kernel_main(uint32_t magic, multiboot_info_t* mb_info) {
+    if (magic != 0x2badb002 || !(mb_info->flags & (1 << 12))) {
+        return;
+    }
 
-    terminal_writestring("SwordXOS Booted!\n");
-    
-    launch_shell();
+    framebuffer = (uint32_t*)(uintptr_t)mb_info->framebuffer_addr;
+    screen_width = mb_info->framebuffer_width;
+    screen_height = mb_info->framebuffer_height;
+    screen_pitch = mb_info->framebuffer_pitch;
+
+    // terminal start
+    term_clear();
+    term_print("SwordXOS Kernel Booted [VBE Mode]");
+    term_print("Type 'help' for available commands.");
+
+    ui_render_desktop();
+    ps2_mouse_init();
+
+    while (1) {
+        mouse_poll_update();
+        keyboard_poll_update();
+    }
 }
