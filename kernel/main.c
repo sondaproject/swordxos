@@ -1,4 +1,4 @@
-// swordxos kenrnel version z1 (first ever GUI version).
+// intbsd kenrnel version z1 (first ever GUI version).
 /*dev notes, i decided to put everything one file, it was mor helpful for me but it coulf be a pain for you to understand.
 thats why i decided to add tags to the kernel, it might help you.*/
 #include <stdbool.h>
@@ -282,7 +282,7 @@ static bool strcmp_exact(const char* a, const char* b) {
 
 //terminal commands
 void execute_command(const char* cmd) {
-    char echo_buf[68] = "swordxos@kernel:~$ ";
+    char echo_buf[68] = "intshell> ";
     uint32_t idx = 19;
     uint32_t c_idx = 0;
     while (cmd[c_idx] != '\0' && idx < 67) {
@@ -295,22 +295,21 @@ void execute_command(const char* cmd) {
         term_print("Available Commands:");
         term_print("  help    - Show this manual");
         term_print("  clear   - Clear terminal output");
-        term_print("  about   - SwordXOS kernel details");
+        term_print("  about   - intBSD kernel details");
         term_print("  fetch   - Display system info");
         term_print("  reboot  - Restart the computer");
     } else if (strcmp_exact(cmd, "clear")) {
         term_clear();
     } else if (strcmp_exact(cmd, "about")) {
-        term_print("SwordXOS Bare-metal Kernel v1.0.4");
         term_print("32-bit Protected Mode, Custom VBE Engine");
     } else if (strcmp_exact(cmd, "fetch")) {
-        term_print("OS: SwordXOS x86_32");
+        term_print("OS: intBSD i686-32");
         term_print("Display: VBE Framebuffer Pixel Engine");
         term_print("Input: PS/2 Dual Mouse/Keyboard Driver");
     } else if (strcmp_exact(cmd, "reboot")) {
         outb(0x64, 0xfe);
     } else if (cmd[0] != '\0') {
-        term_print("Unknown command. Type 'help'.");
+        term_print("Unknown command, type help for help brh");
     }
 }
 
@@ -357,7 +356,7 @@ void draw_terminal_window(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     // shell line before input
     uint32_t prompt_y = start_y + (term_line_count * 20);
     if (prompt_y <= y + h - 28) {
-        draw_string("shell> ", x + 6, prompt_y, color_white);
+        draw_string("intshell> ", x + 9, prompt_y, color_white);
         draw_string(term_input, x + 164, prompt_y, color_green);
         draw_rect(x + 164 + (term_input_len * 8), prompt_y, 8, 16, color_green);
     }
@@ -714,7 +713,7 @@ void kernel_main(uint32_t magic, multiboot_info_t* mb_info) {
 
     // terminal start
     term_clear();
-    term_print("SwordXOS Kernel Booted [VBE Mode]");
+    term_print("intBSD Booted [VBE Mode]");
     term_print("Type 'help' for available commands.");
 
     ui_render_desktop();
